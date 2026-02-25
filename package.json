@@ -1,0 +1,22 @@
+{
+  "name": "pi-critique",
+  "version": "0.1.0",
+  "description": "Structured AI critique for writing and code. Pairs well with annotated-reply and markdown-preview but works standalone.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omaclaren/pi-critique.git"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  }
+}
