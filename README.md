@@ -73,7 +73,7 @@ After receiving a critique, respond with bracketed annotations:
 [question C4: can you elaborate?]
 ```
 
-This works standalone in pi's editor, or with `/reply --raw` from [pi-annotated-reply](https://github.com/omaclaren/pi-annotated-reply) for a smoother workflow.
+This works standalone in pi's editor, or with `/reply` from [pi-annotated-reply](https://github.com/omaclaren/pi-annotated-reply) for a smoother workflow.
 
 ## Install
 
