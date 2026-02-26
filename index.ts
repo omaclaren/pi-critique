@@ -195,6 +195,21 @@ function expandHome(pathInput: string): string {
 	return join(home, pathInput.slice(2));
 }
 
+function normalizePathForComparison(pathInput: string, cwd: string): string {
+	const withoutAt = pathInput.startsWith("@") ? pathInput.slice(1) : pathInput;
+	const expanded = expandHome(withoutAt.trim());
+	return isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
+}
+
+function pathsEqual(a: string, b: string): boolean {
+	if (process.platform === "win32") return a.toLowerCase() === b.toLowerCase();
+	return a === b;
+}
+
+type CritiqueWriteGuard =
+	| { mode: "deny-all"; sourcePath: string }
+	| { mode: "allow-annotated-only"; sourcePath: string; annotatedPath: string };
+
 function detectLens(filePath?: string): Lens {
 	if (!filePath) return "writing";
 	const ext = extname(filePath).toLowerCase();
@@ -230,9 +245,8 @@ function getLastAssistantMarkdown(ctx: ExtensionCommandContext): string | undefi
 	return undefined;
 }
 
-function readFileContent(filePath: string, cwd: string): { ok: true; content: string; label: string } | { ok: false; message: string } {
-	const expanded = expandHome(filePath.trim());
-	const resolved = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
+function readFileContent(filePath: string, cwd: string): { ok: true; content: string; label: string; resolvedPath: string } | { ok: false; message: string } {
+	const resolved = normalizePathForComparison(filePath, cwd);
 
 	try {
 		const stats = statSync(resolved);
@@ -249,7 +263,7 @@ function readFileContent(filePath: string, cwd: string): { ok: true; content: st
 		if (content.includes("\u0000")) {
 			return { ok: false, message: `File appears to be binary: ${filePath}` };
 		}
-		return { ok: true, content, label: filePath };
+		return { ok: true, content, label: filePath, resolvedPath: resolved };
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);
 		return { ok: false, message: `Failed to read file: ${msg}` };
@@ -332,6 +346,38 @@ function parseArgs(args: string): ParsedArgs {
 }
 
 export default function (pi: ExtensionAPI) {
+	let critiqueWriteGuard: CritiqueWriteGuard | undefined;
+
+	pi.on("agent_end", async () => {
+		critiqueWriteGuard = undefined;
+	});
+
+	pi.on("tool_call", async (event, ctx) => {
+		if (!critiqueWriteGuard) return;
+		if (event.toolName !== "write" && event.toolName !== "edit") return;
+
+		const inputPath = (event.input as { path?: unknown } | undefined)?.path;
+		if (typeof inputPath !== "string" || !inputPath.trim()) {
+			return { block: true, reason: "Blocked by /critique safety guard: write/edit path is missing." };
+		}
+
+		const targetPath = normalizePathForComparison(inputPath, ctx.cwd);
+
+		if (critiqueWriteGuard.mode === "deny-all") {
+			return {
+				block: true,
+				reason: `Blocked by /critique safety guard: critique runs are non-destructive (source: ${critiqueWriteGuard.sourcePath}). Use a separate follow-up prompt to apply edits.`,
+			};
+		}
+
+		if (!pathsEqual(targetPath, critiqueWriteGuard.annotatedPath)) {
+			return {
+				block: true,
+				reason: `Blocked by /critique safety guard: only the annotated output path is writable (${critiqueWriteGuard.annotatedPath}); source preserved (${critiqueWriteGuard.sourcePath}).`,
+			};
+		}
+	});
+
 	pi.registerCommand("critique", {
 		description: "Critique a file or the last response. Usage: /critique [path] [--code|--writing] [--no-inline] [--edit]",
 		handler: async (args, ctx) => {
@@ -361,9 +407,11 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			await ctx.waitForIdle();
+			critiqueWriteGuard = undefined;
 
 			let content: string;
 			let label: string;
+			let sourcePath: string | undefined;
 
 			if (parsed.file) {
 				const result = readFileContent(parsed.file, ctx.cwd);
@@ -373,6 +421,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				content = result.content;
 				label = result.label;
+				sourcePath = result.resolvedPath;
 			} else {
 				const markdown = getLastAssistantMarkdown(ctx);
 				if (!markdown) {
@@ -389,19 +438,24 @@ export default function (pi: ExtensionAPI) {
 
 			// Large files: pass filepath, model reads and writes annotated copy to disk
 			if (isLargeFile) {
-				const expanded = expandHome(parsed.file!.trim());
-				const resolvedPath = isAbsolute(expanded) ? expanded : resolve(ctx.cwd, expanded);
+				const resolvedPath = sourcePath ?? normalizePathForComparison(parsed.file!, ctx.cwd);
 				const ext = extname(resolvedPath);
 				const base = resolvedPath.slice(0, resolvedPath.length - ext.length);
 				const annotatedPath = `${base}.critique${ext}`;
+				const normalizedAnnotatedPath = normalizePathForComparison(annotatedPath, ctx.cwd);
 				const prompt = buildLargeFilePrompt(lens, resolvedPath, annotatedPath);
 
 				if (parsed.edit) {
 					ctx.ui.setEditorText(prompt);
 					ctx.ui.notify(`Critique prompt (${lens}) for ${label} loaded into editor. Edit and submit when ready.`, "info");
 				} else {
+					critiqueWriteGuard = {
+						mode: "allow-annotated-only",
+						sourcePath: resolvedPath,
+						annotatedPath: normalizedAnnotatedPath,
+					};
 					pi.sendUserMessage(prompt);
-					ctx.ui.notify(`Critiquing ${label} (${lens}, ${contentLines} lines). Annotated copy → ${annotatedPath}`, "info");
+					ctx.ui.notify(`Critiquing ${label} (${lens}, ${contentLines} lines). Original preserved; annotated copy → ${annotatedPath}`, "info");
 				}
 				return;
 			}
@@ -416,8 +470,9 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.setEditorText(prompt);
 				ctx.ui.notify(`Critique prompt (${lens}) for ${label} loaded into editor. Edit and submit when ready.`, "info");
 			} else {
+				critiqueWriteGuard = sourcePath ? { mode: "deny-all", sourcePath } : undefined;
 				pi.sendUserMessage(prompt);
-				ctx.ui.notify(`Critiquing ${label} (${lens}${parsed.inline ? ", inline" : ""})... Respond with [accept C1], [reject C2: reason], etc.`, "info");
+				ctx.ui.notify(`Critiquing ${label} (${lens}${parsed.inline ? ", inline" : ""})... Original file unchanged. Respond with [accept C1], [reject C2: reason], etc.`, "info");
 			}
 		},
 	});

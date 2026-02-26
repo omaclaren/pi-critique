@@ -1,6 +1,6 @@
 {
   "name": "pi-critique",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Structured AI critique for writing and code. Pairs well with annotated-reply and markdown-preview but works standalone.",
   "type": "module",
   "license": "MIT",

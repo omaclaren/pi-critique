@@ -1,13 +1,15 @@
 # pi-critique
 
-Structured AI critique for writing and code in [pi](https://github.com/badlogic/pi-mono). Submits a critique prompt to the model, which returns numbered critiques (C1, C2, ...) with inline markers in the original document. Pairs well with [pi-annotated-reply](https://github.com/omaclaren/pi-annotated-reply) and [pi-markdown-preview](https://github.com/omaclaren/pi-markdown-preview) but works standalone.
+Structured AI critique for writing and code in [pi](https://github.com/badlogic/pi-mono). Submits a critique prompt to the model, which returns numbered critiques (C1, C2, ...) with inline markers in the document text. Pairs well with [pi-annotated-reply](https://github.com/omaclaren/pi-annotated-reply) and [pi-markdown-preview](https://github.com/omaclaren/pi-markdown-preview) but works standalone.
+
+**Non-destructive by default:** `/critique` is intended to analyze, not edit, your source file.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `/critique` | Critique the last assistant response |
-| `/critique <path>` | Critique a file |
+| `/critique <path>` | Critique a file (non-destructive; original file is unchanged) |
 | `/critique --code` | Force code review lens |
 | `/critique --writing` | Force writing critique lens |
 | `/critique --no-inline` | Critiques list only, no annotated document |
@@ -31,6 +33,13 @@ The model adapts critique types to the genre:
 
 Types are not fixed — the model chooses what fits the content.
 
+## Non-destructive behaviour
+
+- For normal files, the extension reads content and sends it to the model for critique. It does not directly edit your source file.
+- For large files (see below), the model is instructed to write annotations to a separate file: `<filename>.critique.<ext>`.
+- During auto-submitted `/critique <path>` runs, a safety guard blocks write/edit tool calls to prevent accidental in-place edits.
+- To actually apply changes to the original file, run a separate explicit editing step (for example via `/reply` + a follow-up prompt).
+
 ## Lenses
 
 The extension auto-detects whether content is code or writing based on file extension. Override with `--code` or `--writing`.
@@ -40,6 +49,8 @@ Code files (`.ts`, `.py`, `.rs`, `.go`, etc.) get a code review prompt. Writing 
 ## Large files
 
 Files over 500 lines are handled differently to save tokens: the extension passes the file path to the model (rather than embedding the content), and the model reads the file with its tools and writes an annotated copy to `<filename>.critique.<ext>` on disk.
+
+The original file path is preserved; annotations are written to the `*.critique.*` copy.
 
 ## Example output
 
